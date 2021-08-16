@@ -1,0 +1,80 @@
+#This code can be used to obtain mean weekly/monthly temperature from the IMD daily temperature data.
+#Author: Asif Ishtiaque (Asif.Ishtiaque@asu.edu)
+
+
+#Loading the required libraries
+library (tidyverse)
+library (lubridate)
+library(sp)
+library(rgdal)
+library(raster)
+
+
+setwd("Your working directory")
+
+#Years of interest
+years <- c(2005:2010)
+
+#Note: The IMD daily temperature data were available in text file format.
+#The temperature data are in grid tables where the header appears for each day measure
+for (year in years) {
+  text_file <- read.table(paste0("MeanT_", year, ".txt"), skip = 1, header = T)
+  
+  #Coverting the grid table
+  text_long <- text_file %>% pivot_longer(cols = starts_with("X"),
+                                          names_to = "LONG",
+                                          names_prefix = "X",
+                                          values_to = 'Temp')
+  
+  #As the header appeared after each day data, the conversion of grid table
+  #made the header as rows in the new table. We need to remove those headers
+  df <- text_long[text_long$DTMTYEAR != "DTMTYEAR",]
+  
+  #Fixing the right format of the column type
+  df$Date <- dmy(df$DTMTYEAR)
+  df$LAT <- as.numeric(df$LAT.)
+  df$LONG <- as.numeric (df$LONG)
+  
+  #Getting the weeks in a year
+  df$week <- week (df$Date)
+  
+  #Summarizing temperature data based on weeks
+  df_week <- df %>% group_by(LAT, LONG, week) %>% 
+    summarise(MeanT_wk = mean(Temp), Date_last = last(Date))
+  
+  #One year has 52 weeks (based on lubridate's week function estimate)
+  weeks <- c(1:52)
+  
+  #For stacking all weekly rasters in one raster
+  rastack<- stack ()
+  
+  #For each week, creating an individual raster and then stack it so that the output is
+  #just one tif file
+  for (i in weeks) {
+    dfilt <- df_week %>% filter (week == i) %>% select (LAT, LONG, MeanT_wk)
+    coordinates(dfilt) <- ~LONG + LAT
+    proj4string(dfilt) <- CRS ("+init=epsg:4326")
+    
+    lat <- unique (dfilt$LAT)
+    long <- unique (dfilt$LONG)
+    
+    img <- raster ()
+    ext <- extent (min(long), max(long), min(lat), max(lat))
+    extent(img) <- ext
+    res (img) <- 1
+    
+    ras_layer <- rasterize(dfilt, img, "MeanT_wk")
+    ras_layer[ras_layer >= 99] <- NA
+    rastack <- stack (rastack, ras_layer)
+    print (paste0("Yay! ", year, "_week_", i, " is stacked!"))
+  }
+  writeRaster(rastack, paste0("MeanT_weekly_", year, ".tif"), format = 'GTiff')
+  print (paste0("Year ", year, " weekly rasters are stacked!"))
+}
+
+
+#Note: This code calculates week number from January 1 and week 52 ends in Dec 30 (or 29 if it's a leap year).
+#If you want to add the last one or two days of the year with week 52, you have to rewrite the code.
+#You can get the day number of a year and starting from Jan 1, get the mean values for every 7 days.
+#To add the last 1 or 2 days, you can use the modulus operator (%%) and 
+#make a rule that if the remainder is <3, it will round the week days.
